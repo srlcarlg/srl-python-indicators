@@ -624,7 +624,7 @@ class OrderFlowTicks:
             side_center_right = bar_index + side_center
             max_side_profile = max_side * 2
 
-            buy_max_value = max(buy_sell['buy_profile'][0] if buy_sell['buy_profile'][0] else 1)
+            buy_max_value = max(buy_sell['buy_profile'][0] if buy_sell['buy_profile'][0] else [1])
             for value in buy_sell['buy_profile'][0]:
                 first = value * max_side
                 result = (first / buy_max_value) if (first != 0) else 0
@@ -638,7 +638,7 @@ class OrderFlowTicks:
                 # center right = left align
                 plot_profile[f'plotly_buy_profile_{chart}_numbers'][0].append(bar_index + 0.1)
 
-            sell_max_value = max(buy_sell['sell_profile'][0] if buy_sell['sell_profile'][0] else 1)
+            sell_max_value = max(buy_sell['sell_profile'][0] if buy_sell['sell_profile'][0] else [1])
             for value in buy_sell['sell_profile'][0]:
                 first = value * (-max_side)
                 result = (first / sell_max_value) if (first != 0) else 0
