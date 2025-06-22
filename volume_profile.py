@@ -386,7 +386,8 @@ class VolumeProfile:
                 volume = df_interval['volume'].iat[i]
                 is_up = close >= open
                 if self._distribution == DistributionData.OHLC or self._distribution == DistributionData.OHLC_No_Avg:
-                    avg_vol = volume / (open + high + low + close / 4) if self._distribution == DistributionData.OHLC else volume
+                    avg_vol = (volume / (open + high + low + close / 4)) if self._distribution == \
+                                                                            DistributionData.OHLC else volume
                     for idx in range(len(interval_segments)):
                         row = interval_segments[idx]
                         if is_up:
