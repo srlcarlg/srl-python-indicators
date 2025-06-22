@@ -1,0 +1,41 @@
+
+* _**31/may/2025**_ - Start coding **_srl-python-indicators_**: 
+    - 31/may/2025 - Start **_weis_wyckoff_system.py_**
+    - 1/jun/2025 - **_Weis Waves part_** completed with empirical tests
+    - 2/jun/2025 - **_Wyckoff part_** completed with empirical tests
+    - 3/jun/2025 - -- _(later-night 23:00)_ Start coding **_'tpo_profile.py'_**
+    - 4/jun/2025 - -- _(later-night 23:00)_ **_'TPO profile'_** logic completed with empirical tests
+        - Need some work to return multiples profiles
+    - 5/jun/2025 - _(daylight 11:40)_ Start coding **_'volume_profile.py'_** 
+        - _(later-night)_ OHLCV + Ticks _(normal, buy_sell, delta)_ logic completed with empirical tests
+        - Need some work to return multiples profiles
+    - 6/jun/2025 - -- _(night 21:00)_ Start coding **_order_flow_ticks.py__** 
+        - 7/jun 00:42 - _(normal, buy_sell, delta)_ modes logic completed, missing _"Strength Filter"_ implementation
+        - 8/jun - Filter completed, _(the rest of day)_ did nothing related to programming
+    - 9/jun/2025
+        - Return multiples profiles _(TPO and VP)_ implementation completed
+        - Parallel processing of:
+            - TPO Profile
+            - Volume Profile
+            - Order Flow Ticks
+        - All 2 above need return its modes _(normal, buy_sell, delta)_
+    - 10/jun/2025 - **_order_flow_ticks.py__** return all modes with ohlcv dataframe completed
+    - 11/jun/2025 - -- Did nothing related to programming
+    - 12/jun/2025 - + New internet provider -- _(later night 21:00)_ Return to development
+        - 13/jun 02:50: **_TPO/Volume profile_** return all modes with ohlcv intervals dataframes completed
+            - **_mplfinance plot_** workaround with addplot completed
+            - Some playing with 'finplot' package
+        - 13/jun 04:30, **_mplfinance_** plot multiples profiles workaround with ohlcv dataframe completed
+        - 13/jun (afternoon) **_mplfinance_** plot normal/buy_sell/delta profiles completed
+    - 14/jun Add comments/documentation to all indicators
+    - 15/jun **_Weis & Wyckoff System'_** plot incompleted
+        - **TODO:** Format Time/Volume to 3/4 string chars
+        - **TODO:** Price position of all waves
+    - 16-17/jun: Room organization
+    - 18/jun **_Weis & Wyckoff System'_** mplfinance plot completed
+        - Some research into 'plotly' possibilities
+    - 19/jun: -- _(night 18:00)_ Start coding plot() for **_Order Flow Ticks_** with plotly
+    - 20/jun: **_Order Flow Ticks_** plotly finished!
+    - 21/jun: Final fine-tune of all indicators code (comments/documentation/notebooks)
+    - 22/jun 02:45: Github repository
+
