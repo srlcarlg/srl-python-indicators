@@ -1,24 +1,24 @@
 ## About order_flow_aggregated.py
 
-Python proof-of-concept indicator, yet to be developed for cTrader trading platform!
+**Python proof-of-concept indicator**, yet to be developed for cTrader trading platform!
 
-Actually, it's a conjunction of Volume Profile _(Ticks)_ + Order Flow Ticks indicators.
-* Volume Profile _(intervals/values)_ for Aggregate Order Flow data.
-* Volume Profile _(segmentation)_ to calculate the Order Flow of each bar.
+Actually, it's a conjunction of **Volume Profile _(Ticks)_ + Order Flow Ticks** indicators.
+* Volume Profile _(intervals/values)_ for **Aggregate Order Flow** data.
+* Volume Profile _(segmentation)_ to calculate the **Order Flow of each bar**.
 
 This 'combination' gives the quality that others footprint/order-flow software have:
 * **Aligned Rows** for all bars on the chart, or - in our case, at the given interval.
 * **Possibility to create a truly (Volume, Delta) Bubbles chart.**
 
 It's means that _**Order Flow Ticks**_ is wrong / no longer useful? Absolutely not! Think about it:
-* With ODF_Ticks you get **-> exactly <-** what happened **_inside a bar_**, it's like looking at:
-    * a microstructure (ticks) through a microscope (bar segments) using optical zoom (bar).
-* With ODF_Aggregated you get a **-> structured view <-** of what happened **_inside the bars_**, it's like looking at:
-    * a microstructure (ticks) through a filter lens (VP segments) of a microscope (VP values) using digital zoom (VP interval).
+* With **ODF_Ticks** you get **-> exactly <-** what happened **_inside a bar_**, it's like looking at: <br>
+  a microstructure _(ticks)_ through a microscope _(bar segments)_ using optical zoom _(bar)_.
+* With **ODF_Aggregated** you get a **-> structured view <-** of what happened **_inside the bars_**, it's like looking at: <br>
+  a microstructure _(ticks)_ through a filter lens _(VP segments)_ of a microscope _(VP values)_ using digital zoom (VP interval).
 
 In other words:
-* Order Flow Ticks - raw detail.
-* Order Flow Aggregated - compressed detail.
+* Order Flow Ticks - **raw detail**.
+* Order Flow Aggregated - **compressed detail**.
 
 To be fair, this 'idea' _(aggregate order flow by volume profile intervals)_ has been stuck in my mind since I developed
 my last indicator for cTrader (Volume Profile) in 2023. <br>
@@ -76,7 +76,7 @@ odf_agg.plot(iloc_value=15, chart='candle', renderer=renderer, show_profiles=Fal
     
 
 
-#### Note that the first bar values are the same as Order Flow Ticks, after that, the next bars values start to diverge due to these aligned lines.
+### Note that the first bar values are the same as Order Flow Ticks, after that, the next bars values start to diverge due to these aligned lines.
 
 ### Let's see the Volume Profile.
 
