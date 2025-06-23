@@ -1,9 +1,9 @@
 # srl-python-indicators
-Python version of the indicators I developed for cTrader trading plataform, with improvements (paralel processing) and additional features compared to C# source code.
+Python version of the indicators I developed for cTrader trading plataform, with improvements _(paralel processing)_ and additional features compared to C# source code.
 
-Only order_flow_ticks is plotted using the 'plotly' library, see 'notebooks' folder.
+Only _**order_flow_ticks**_ and _**order_flow_aggregated**_ are plotted using the **plotly** library, see 'notebooks' folder.
 
-All others are plotted with mplfinance.
+All others are plotted with **mplfinance**.
 
 
 ```python
