@@ -1,55 +1,68 @@
 """
 Weis & Wyckoff System
 =====
-David H. Weis and Richard Wyckoff concepts on Renko Chart
-
 Python version of Weis & Wyckoff System (v2.0) developed for cTrader Trading Platform
-with corrections from C# source
 
-It is intended to be used together with the renkodf package
-or Renko OHLC charts with date/volume data
+David H. Weis and Richard Wyckoff concepts for any OHLC Chart
+
+It's intended to be used together with the renkodf/rangedf package
+or any OHLC chart with date/volume data
+
+Features from revision 1 (after Order Flow Aggregated development)
+    - Support to [Candles, Heikin-Ash, Tick, Range] Charts
+    - Improved ZigZag => MTF support + [Percentage, Pips, NoLag_HighLow] Modes, ATR mode hasn't been implemented
+    - Custom MAs
+    - Strength Filters (MA/StdDev/Both, Normalized_Emphasized)
+
+Additional Features => that will be implemented to C# version... sometime next year (2026)
+    - [L1Norm] filter alternative to StrengthFilter
+    - FilterRatio.[Fixed / Percentage]
 
 Python/C# author:
     - srlcarlg
-Original author of code concepts in Pinescript/TradingView:
+Original author of code concepts (before revision 1) in Pinescript/TradingView:
     - `akutsusho - Numbers-Renko 数字練行足 <https://www.tradingview.com/script/9BKOIhdl-Numbers-Renko/>`_
 About the concept/style of the indicators:
     - David Weis - Weis on Wyckoff Renko Charts \n
     - `YouTube <https://www.youtube.com/watch?v=wfRwiU2D_Fs>`_ \n
     - `Vimeo <https://vimeo.com/394541866>`_
 """
+
 import numpy as np
 import pandas as pd
-import mplfinance as mpf
+from plotly.subplots import make_subplots
+import plotly.graph_objects as go
+
+from custom_mas import get_ma, get_stddev
+from models_utils.ww_models import FilterType, StrengthFilter, WavesMode, ZigZagInit, WavesInit, FilterRatio
+from models_utils.ww_utils import reversal_logic, zigzag_logic, rolling_percentile, l1norm
+
 
 class WeisWyckoffSystem:
-    def __init__(self, df_ohlcv: pd.DataFrame | None, large_wave_ratio: float = 1.5, ema_period: int = 5):
+    def __init__(self, df_ohlcv: pd.DataFrame | None = None,
+                 df_htf: pd.DataFrame | None = None,
+                 df_ltf: pd.DataFrame | None = None,
+                 strength_filter: StrengthFilter | None = None,
+                 waves_init: WavesInit | None = None,
+                 zigzag_init: ZigZagInit | None = None):
         """
-        David H. Weis and Richard Wyckoff analysis on Renko OHLCV Chart. \n
+        David H. Weis and Richard Wyckoff analysis on OHLCV Chart. \n
         Backtest version.
 
         Usage
         ------
 
         >>> from weis_wyckoff_system import WeisWyckoffSystem
-        >>> wws = WeisWyckoffSystem(df_ohlcv)
+        >>> wws = WeisWyckoffSystem(df_ohlcv...)
         >>> df = wws.full_analysis()
-        >>> # or
+        >>> # or specific analysis
         >>> df_waves = wws.weis_waves_analysis()
         >>> df_wyckoff = wws.wyckoff_analysis()
+
         >>> # or
         >>> wws = WeisWyckoffSystem()
         >>> df_waves = wws.weis_waves_analysis(df_ohlcv)
         >>> df_wyckoff = wws.wyckoff_analysis(df_ohlcv)
-
-        Parameters
-        ----------
-        :param df_ohlcv:
-            OHLCV with datetime index
-        :param large_wave_ratio:
-            Ratio value for Large (Volume, Effort vs Result) Waves
-        :param ema_period:
-            EMA period for Wyckoff Analysis
         """
         if df_ohlcv is not None:
             if 'datetime' not in df_ohlcv.columns:
@@ -58,44 +71,50 @@ class WeisWyckoffSystem:
                 raise ValueError("Column 'close' doesn't exist!")
             if 'volume' not in df_ohlcv.columns:
                 raise ValueError("Column 'volume' doesn't exist!")
+        if df_htf is not None:
+            if 'datetime' not in df_htf.columns:
+                df_htf["datetime"] = df_htf.index
+        if df_ltf is not None:
+            if 'datetime' not in df_ltf.columns:
+                df_ltf["datetime"] = df_ltf.index
 
-        self._df = df_ohlcv
-        self._large_wave_ratio = large_wave_ratio
-        self._ema_period = ema_period
+        self._df_ohlcv = df_ohlcv
+        self._df_htf = df_htf
+        self._df_ltf = df_ltf
+        self._strength_filter = strength_filter if isinstance(strength_filter, StrengthFilter) else StrengthFilter()
+        self._waves_init = waves_init if isinstance(waves_init, WavesInit) else WavesInit()
+        self._zigzag_init = zigzag_init if isinstance(zigzag_init, ZigZagInit) else ZigZagInit()
 
-        # Weis Waves
-        self._prev_waves_volume: list = [0, 0, 0, 0]
-        self._prev_waves_vol_div_renko: list = [0.0, 0.0, 0.0, 0.0]
-        self._prev_cumulative_Up: list = [0, 0]
-        self._prev_cumulative_Down: list = [0, 0]
+        if df_ohlcv is not None:
+            if self._waves_init.is_open_time:
+                df_ohlcv['end_time'] = df_ohlcv['datetime'].shift(-1)
+            else:
+                df_ohlcv['start_time'] = df_ohlcv['datetime'].shift(1)
 
-        # same_wave = previous same direction wave
-        # div = volume divide(/) renko
-        self._prev_same_wave_div_Up: float = 0.0
-        self._prev_same_wave_div_Down: float = 0.0
-        # vol = cumulative volume
-        self._prev_same_wave_vol_Up: float = 0.0
-        self._prev_same_wave_vol_Down: float = 0.0
-
-        # Wyckoff
-        # No need global variable
-
-    def full_analysis(self):
+    def full_analysis(self, df: pd.DataFrame | None = None,
+                      df_htf: pd.DataFrame | None = None,
+                      df_ltf: pd.DataFrame | None = None,
+                      strength_filter: StrengthFilter | None = None,
+                      waves_init: WavesInit | None = None,
+                      zigzag_init: ZigZagInit | None = None):
         """
-        Performs Weis Waves and Wyckoff analysis
-        :return: df
+        Performs Weis Waves and Wyckoff analysis.
         """
-        df = self.weis_waves_analysis()
-        df = self.wyckoff_analysis(df)
+        df = self.weis_waves_analysis(df, df_htf, df_ltf, waves_init, zigzag_init)
+        df = self.wyckoff_analysis(df, strength_filter)
         return  df
 
-    def weis_waves_analysis(self, df: pd.DataFrame | None = None):
+    def weis_waves_analysis(self, df: pd.DataFrame | None = None,
+                            df_htf: pd.DataFrame | None = None,
+                            df_ltf: pd.DataFrame | None = None,
+                            waves_init: WavesInit | None = None,
+                            zigzag_init: ZigZagInit | None = None):
         """
-        Performs Weis Waves analysis on the given dataframe. \n
-        Designed for RENKO CHART ONLY. \n
+        Performs Weis Waves analysis on the given dataframe.
 
-        The following (16) columns will be added:
+        The following (17) columns will be added:
             * 'trendline'
+            * 'turning_point'
         Waves value:
             * 'end_wave'
             * 'wave_volume'
@@ -116,14 +135,47 @@ class WeisWyckoffSystem:
             * 'wave_time_min'   minutes
             * 'wave_time_hour'  hours
 
-        :param df: dataframe
-            If None, the df_ohlcv from WWS instance will be used
-        :return: df
+        Parameters
+        ----------
+        df : pd.DataFrame
+            If None, the df_ohlcv from WWS instance will be used, same for remaining parameters.
+        df_htf : pd.DataFrame
+            Higher Timeframe OHLC for ZigZag, will be used if provided.
+        df_ltf : pd.DataFrame
+            Lower Timeframe OHLC for ZigZag.NoLag_HighLow with PriorityMode.Auto, will be used if provided.
+        waves_init : WavesInit
+            self-explanatory
+        zigzag_init : ZigZagInit
+            self-explanatory
         """
+        wi = waves_init if isinstance(waves_init, WavesInit) else self._waves_init
+        zz = zigzag_init if isinstance(zigzag_init, ZigZagInit) else self._zigzag_init
+
+        # WavesInit should be reset in order to use another df_ohlcv timeframe
+        wi.reset_waves()
+
         if df is None:
-            df = self._df
+            df = self._df_ohlcv
+        else:
+            if 'datetime' not in df.columns:
+                df["datetime"] = df.index
+            if wi.is_open_time:
+                df['end_time'] = df['datetime'].shift(-1)
+            else:
+                df['start_time'] = df['datetime'].shift(1)
+
+        df_htf = self._df_htf if df_htf is None else df_htf
+        df_ltf = self._df_ltf if df_ltf is None else df_ltf
+
+        if df_htf is not None:
+            if 'datetime' not in df_htf.columns:
+                df_htf["datetime"] = df_htf.index
+        if df_ltf is not None:
+            if 'datetime' not in df_ltf.columns:
+                df_ltf["datetime"] = df_ltf.index
 
         df['trendline'] = np.NaN
+        df['turning_point'] = np.NaN
         # Waves values
         df['end_wave'] = np.NaN
         df['wave_volume'] = np.NaN
@@ -136,486 +188,414 @@ class WeisWyckoffSystem:
         df['effort_result_vs_previous'] = np.NaN
         df['wave_vs_same_direction'] = np.NaN
         df['wave_vs_previous'] = np.NaN
-        # Other waves
+        # Other waves - price
         df['wave_price'] = np.NaN
-
+        # Other waves - time
         df['wave_time'] = pd.Timedelta(milliseconds=0)
         df['wave_time_ms'] = np.NaN
         df['wave_time_sec'] = np.NaN
         df['wave_time_min'] = np.NaN
         df['wave_time_hour'] = np.NaN
 
-        trend_start_index = 0
         df_len = len(df)
-
-        def _direction_changed(index: int):
-            if index + 1 >= df_len:
-                return False
-
-            dynamic_current = df['close'].iat[index] > df['open'].iat[index]
-            next_is_up = df['close'].iat[index + 1] > df['open'].iat[index + 1]
-            next_is_down = df['close'].iat[index + 1] < df['open'].iat[index + 1]
-            prev_is_up = df['close'].iat[index - 1] > df['open'].iat[index - 1]
-            prev_is_down = df['close'].iat[index - 1] < df['open'].iat[index - 1]
-
-            return (prev_is_up and dynamic_current and next_is_down) or (prev_is_down and dynamic_current and next_is_down) \
-                or (prev_is_down and not dynamic_current and next_is_up) or (prev_is_up and not dynamic_current and next_is_up)
-
-        def _set_extremum(index: int):
-            # End of wave
-            if not _direction_changed(index):
-                return False
-            df['end_wave'].iat[index] = df['close'].iat[index]
-
-            dynamic_current = df['close'].iat[index] > df['open'].iat[index]
-            if dynamic_current:
-                self._calculate_waves(df, 1, trend_start_index, index, True)
-            else:
-                self._calculate_waves(df, -1, trend_start_index, index, True)
-
-            return True
-
-        def _move_extremum(index: int):
-            df[ 'trendline'].iat[index] = df['open'].iat[index]
-
-            dynamic_current = df['close'].iat[index] > df['open'].iat[index]
-            if dynamic_current:
-                self._calculate_waves(df, 1, trend_start_index, index, False)
-            else:
-                self._calculate_waves(df, -1, trend_start_index, index, False)
-
-            return _set_extremum(index)
-
-        # "Zig Zag" for Renko (only)
-        # It's not a true zigzag indicator, since Renko chart is already a 'filter' itself
-        # We just need to know when the Trend ends = Reversal Renko
-        # and the Trendline is just the Open price of each brick
-        # so, C# version can be simplified.
-        start_trend = False
         for i in range(df_len):
-            if start_trend:
-                trend_start_index = i
             if i + 1 >= df_len:
                 break
-            start_trend = _move_extremum(i)
+
+            if wi.waves_mode == WavesMode.Reversal:
+                reversal_logic(df, i, wi)
+            else:
+                low_i = df['low'].iat[i]
+                high_i = df['high'].iat[i]
+                prev_low_i = df['low'].iat[i - 1]
+                prev_high_i = df['high'].iat[i - 1]
+
+                if df_htf is not None:
+                    date_i = df['datetime'].iat[i]
+                    htf_prices = df_htf.loc[df_htf['datetime'] >= date_i].head(1)
+                    if len(htf_prices) > 0:
+                        low_i = htf_prices['low'].iat[0]
+                        high_i = htf_prices['high'].iat[0]
+
+                    prev_date_i = df['datetime'].iat[i - 1]
+                    htf_prev_prices = df_htf.loc[df_htf['datetime'] >= prev_date_i].head(1)
+                    if len(htf_prev_prices) > 0:
+                        prev_low_i = htf_prev_prices['low'].iat[0]
+                        prev_high_i = htf_prev_prices['high'].iat[0]
+
+                price_tuple = (low_i, high_i, prev_low_i, prev_high_i)
+                zigzag_logic(zz, df, df_htf, df_ltf, wi, i, price_tuple)
 
         return df
 
-    def _calculate_waves(self, df: pd.DataFrame,  direction: int, first_brick_index: int, last_brick_index: int, direction_changed: bool):
-        def cumul_volume():
-            if first_brick_index == last_brick_index:
-                return df['volume'].iat[last_brick_index]
-            volume = 0
-            # (first_brick - 1) because of python's range behavior
-            # first=1 and last=2: [1]
-            # first=1 and last=3: [1, 2]
-            for i in range(first_brick_index, last_brick_index + 1):
-                volume += df['volume'].iat[i]
-            return volume
-
-        def cumul_renko():
-            if first_brick_index == last_brick_index:
-                return 1
-            renko_count = 0
-            # (first_brick - 1) because of python's range behavior
-            # first=1 and last=2: [1]
-            # first=1 and last=3: [1, 2]
-            for i in range(first_brick_index, last_brick_index + 1):
-                renko_count += 1
-            return renko_count
-
-        def cumul_price(is_up: bool):
-            price = df['low'].iat[first_brick_index] - df['high'].iat[last_brick_index] if is_up else \
-                df['high'].iat[first_brick_index] - df['low'].iat[last_brick_index]
-            return abs(round(price, 5))
-
-        def cumul_time():
-            # first_brick - 1 because renkodf datetime is the CloseTime of bar
-            prev_time = df['datetime'].iat[first_brick_index - 1]
-            if first_brick_index == last_brick_index:
-                prev_time = df['datetime'].iat[first_brick_index - 1]
-            curr_time = df['datetime'].iat[last_brick_index]
-
-            df['wave_time'].iat[last_brick_index] = (curr_time - prev_time)
-            df['wave_time_ms'].iat[last_brick_index] = (curr_time - prev_time) / pd.Timedelta(milliseconds=1)
-            df['wave_time_sec'].iat[last_brick_index] = (curr_time - prev_time) / pd.Timedelta(seconds=1)
-            df['wave_time_min'].iat[last_brick_index] = (curr_time - prev_time) / pd.Timedelta(minutes=1)
-            df['wave_time_hour'].iat[last_brick_index] = (curr_time - prev_time) / pd.Timedelta(hours=1)
-
-        def other_waves(is_up: bool):
-            df['wave_price'].iat[last_brick_index] = cumul_price(is_up)
-            cumul_time()
-
-        cumulative_volume = cumul_volume()
-        cumulative_renko = cumul_renko()
-        cumulative_vol_div_renko = round(cumulative_volume / cumulative_renko, 1)
-
-        df['wave_volume'].iat[last_brick_index] = cumulative_volume
-        df['wave_effort_result'].iat[last_brick_index] = cumulative_vol_div_renko
-
-        if direction == 1:
-            next_is_down = df['close'].iat[last_brick_index + 1] < df['open'].iat[last_brick_index + 1]
-            prev_is_down = df['close'].iat[last_brick_index - 1] < df['open'].iat[last_brick_index - 1]
-
-            end_wave = direction_changed
-            if end_wave:
-                self._effort_vs_result_analysis(df, last_brick_index, cumulative_vol_div_renko, end_wave,True)
-                self._waves_analysis(df, last_brick_index, cumulative_volume, True)
-                other_waves(True)
-                self._set_previous_waves(cumulative_volume, cumulative_vol_div_renko, prev_is_down, next_is_down, True,
-                                         direction_changed)
-
-        elif direction == -1:
-            next_is_up = df['close'].iat[last_brick_index + 1] > df['open'].iat[last_brick_index + 1]
-            prev_is_up = df['close'].iat[last_brick_index - 1] > df['open'].iat[last_brick_index - 1]
-
-            end_wave = direction_changed
-            if end_wave:
-                self._effort_vs_result_analysis(df, last_brick_index, cumulative_vol_div_renko, end_wave,False)
-                self._waves_analysis(df, last_brick_index, cumulative_volume, False)
-                other_waves(False)
-                self._set_previous_waves(cumulative_volume, cumulative_vol_div_renko, prev_is_up, next_is_up, False,
-                                         direction_changed)
-
-        return df
-
-    def _effort_vs_result_analysis(self, df, index, cumul_vol_div_renko: float, is_end_wave: bool, is_up: bool):
-        def large_effort_result():
-            have_zero = False
-            for i, value in enumerate(self._prev_waves_vol_div_renko):
-                if value == 0.0:
-                    have_zero = True
-                    break
-            if have_zero:
-                return 0
-            return 1 if (cumul_vol_div_renko + sum(self._prev_waves_vol_div_renko)) / 5 * self._large_wave_ratio < cumul_vol_div_renko else 0
-
-        # 1 = greater, -1 = lesser
-        # Right comparison mark in C# version is wrongly implemented, instead of use the previous wave value
-        # it's using the same direction wave value as the Left comparison mark.
-        if is_up:
-            df['effort_result_vs_same_direction'].iat[index] = 1 if cumul_vol_div_renko > self._prev_same_wave_div_Up else -1
-            df['effort_result_vs_previous'].iat[index] = 1 if cumul_vol_div_renko > self._prev_cumulative_Down[1] else -1
-        else:
-            df['effort_result_vs_same_direction'].iat[index] = 1 if cumul_vol_div_renko > self._prev_same_wave_div_Down else -1
-            df['effort_result_vs_previous'].iat[index] = 1 if cumul_vol_div_renko > self._prev_cumulative_Up[1] else -1
-
-        if is_end_wave:
-            df['large_effort_result'].iat[index] = large_effort_result()
-
-    def _waves_analysis(self, df, index, cumul_vol: float, is_up: bool):
-        # 1 = greater, -1 = lesser
-        # Right comparison mark in C# version is wrongly implemented, instead of use the previous wave value
-        # it's using the same direction wave value as the Left comparison mark.
-        if is_up:
-            df['wave_vs_same_direction'].iat[index] = 1 if cumul_vol > self._prev_same_wave_vol_Up else -1
-            df['wave_vs_previous'].iat[index] = 1 if cumul_vol > self._prev_cumulative_Down[0] else -1
-        else:
-            df['wave_vs_same_direction'].iat[index] = 1 if cumul_vol > self._prev_same_wave_vol_Down else -1
-            df['wave_vs_previous'].iat[index] = 1 if cumul_vol > self._prev_cumulative_Up[0] else -1
-
-        df['large_wave'].iat[index] = 1 if (cumul_vol + sum(self._prev_waves_volume)) / 5 * self._large_wave_ratio < cumul_vol else 0
-
-    def _set_previous_waves(self, cumul_vol: float, cumul_vol_div_renko: float, prev_is_dynamic: bool, next_is_dynamic: bool, is_up: bool, direction_changed: bool):
-
-        condition_trend = not prev_is_dynamic and direction_changed and next_is_dynamic
-        condition_ranging = prev_is_dynamic and direction_changed and next_is_dynamic
-
-        def set_ranging():
-            # Effort vs Result Analysis
-            curr_wave = self._prev_waves_vol_div_renko
-            new_wave = [curr_wave[1], curr_wave[2], curr_wave[3], cumul_vol_div_renko]
-            self._prev_waves_vol_div_renko = new_wave
-
-            # Large Weis Wave Analysis
-            curr_wave = self._prev_waves_volume
-            new_wave = [curr_wave[1], curr_wave[2], curr_wave[3], cumul_vol]
-            self._prev_waves_volume = new_wave
-
-        # Exclude the most old wave, keep the 3 others and add current Wave value for most recent Wave
-        # Set previous accumulated UP WAVE
-        if is_up:
-            # (prevIsDown && DirectionChanged && nextIsDown);
-            if condition_ranging:
-                set_ranging()
-            # (prevIsUp && DirectionChanged && nextIsDown)
-            elif condition_trend:
-                prev_cumul_vol_up = self._prev_cumulative_Up[0]
-                prev_cumul_vol_div_renko_up = self._prev_cumulative_Up[1]
-                self._prev_same_wave_div_Up = prev_cumul_vol_div_renko_up
-                self._prev_same_wave_vol_Up = prev_cumul_vol_up
-
-                # Effort vs Result Analysis
-                curr_wave = self._prev_waves_vol_div_renko
-                new_wave = [curr_wave[1], curr_wave[2], curr_wave[3], prev_cumul_vol_div_renko_up]
-                self._prev_waves_vol_div_renko = new_wave
-
-                # Large Weis Wave Analysis
-                curr_wave = self._prev_waves_volume
-                new_wave = [curr_wave[1], curr_wave[2], curr_wave[3], prev_cumul_vol_up]
-                self._prev_waves_volume = new_wave
-
-            self._prev_cumulative_Up = [cumul_vol, cumul_vol_div_renko]
-
-        # Set previous accumulated DOWN WAVE
-        else:
-            # (prevIsUp && DirectionChanged && nextIsUp);
-            if condition_ranging:
-                set_ranging()
-            # (prevIsDown && DirectionChanged && nextIsUp);
-            elif condition_trend:
-                prev_cumul_vol_down = self._prev_cumulative_Down[0]
-                prev_cumul_vol_div_renko_down = self._prev_cumulative_Down[1]
-                self._prev_same_wave_div_Down = prev_cumul_vol_div_renko_down
-                self._prev_same_wave_vol_Down = prev_cumul_vol_down
-                # Effort vs Result Analysis
-                curr_wave = self._prev_waves_vol_div_renko
-                new_wave = [curr_wave[1], curr_wave[2], curr_wave[3], prev_cumul_vol_div_renko_down]
-                self._prev_waves_vol_div_renko = new_wave
-
-                # Large Weis Wave Analysis
-                curr_wave = self._prev_waves_volume
-                new_wave = [curr_wave[1], curr_wave[2], curr_wave[3], prev_cumul_vol_down]
-                self._prev_waves_volume = new_wave
-
-            self._prev_cumulative_Down = [cumul_vol, cumul_vol_div_renko]
-
-    def wyckoff_analysis(self, df: pd.DataFrame | None = None):
+    def wyckoff_analysis(self, df: pd.DataFrame | None = None,
+                         strength_filter: StrengthFilter | None = None):
         """
-        Performs Wyckoff analysis on the given dataframe. \n
-        Can be used with Range charts \n
-        The following (7) columns will be added:
+        Performs Wyckoff analysis on the given dataframe.
+
+        The following (9) columns will be added:
+            * 'volume_filter'
+            * 'time_filter'
+            * 'volume_strength'
+            * 'time_strength'
+        Bar time:
             * 'bar_time'
-            * 'strength_volume'
-            * 'strength_time'
-        Bar time(float format):
             * 'bar_time_ms'    milliseconds
             * 'bar_time_sec'   seconds
             * 'bar_time_min'   minutes
             * 'bar_time_hour'  hours
 
-        :param df: dataframe
-            If None, the df_ohlcv from WWS instance will be used
-        :return: df
+        Parameters
+        ----------
+        df : pd.DataFrame
+            If None, the df_ohlcv from WWS instance will be used, same for remaining parameters.
+        strength_filter : StrengthFilter
+            self-explanatory
         """
         if df is None:
-            df = self._df
-        ema_period = self._ema_period
-
-        # EMA Volume
-        volume = df['volume'].copy()
-        volume.iloc[:ema_period - 1] = np.NaN
-        volume.iloc[ema_period - 1] = volume.iloc[0:ema_period].mean()
-        df['ema_volume'] = volume.ewm(span=ema_period).mean()
+            df = self._df_ohlcv
+        f = strength_filter if isinstance(strength_filter, StrengthFilter) else self._strength_filter
 
         # Bar time
         time_bars = pd.DataFrame(df.index, index=df.index)
-        prev_time = time_bars.shift(1)
-        curr_time = time_bars
+        prev_time = time_bars if f.is_open_time else time_bars.shift(1)
+        curr_time = time_bars.shift(-1) if f.is_open_time else time_bars
         df['bar_time'] = (curr_time - prev_time)
         df['bar_time_ms'] = (curr_time - prev_time) / pd.Timedelta(milliseconds=1)
         df['bar_time_sec'] = (curr_time - prev_time) / pd.Timedelta(seconds=1)
         df['bar_time_min'] = (curr_time - prev_time) / pd.Timedelta(minutes=1)
         df['bar_time_hour'] = (curr_time - prev_time) / pd.Timedelta(hours=1)
 
-        # EMA Time
-        time = df['bar_time_ms'].copy()
-        time.iloc[:ema_period - 1] = np.NaN
-        time.iloc[ema_period - 1] = time.iloc[0:ema_period].mean()
-        df['ema_time'] = time.ewm(span=ema_period).mean()
+        # Filters
+        match f.filter_type:
+            case FilterType.MA | FilterType.StdDev | FilterType.Both:
+                df['volume_ma'] = get_ma(df['volume'].to_numpy(), f.ma_type, f.ma_period)
+                df['time_ma'] = get_ma(df['bar_time_ms'].to_numpy(), f.ma_type, f.ma_period)
 
-        # Volume Filter
-        df['filter_volume'] = df['volume'] / df['ema_volume']
-        df['strength_volume'] = np.where(df['filter_volume'] > 2, 4,
-                                np.where(df['filter_volume'] > 1.5, 3,
-                                np.where(df['filter_volume'] > 1, 2,
-                                np.where(df['filter_volume'] >  0.5, 1, 0))))
-        # Time Filter
-        df['filter_time'] = (df['bar_time'] / df['ema_time']) / pd.Timedelta(milliseconds=1)
-        df['strength_time'] = np.where(df['filter_time'] > 2, 4,
-                              np.where(df['filter_time'] > 1.5, 3,
-                              np.where(df['filter_time'] > 1, 2,
-                              np.where(df['filter_time'] >  0.5, 1, 0))))
+                df['volume_filter'] = df['volume'] / df['volume_ma']
+                df['time_filter'] = (df['bar_time_ms'] / df['time_ma'])
+                if f.filter_type in [FilterType.StdDev, FilterType.Both]:
+                    df['volume_stddev'] = get_stddev(df['volume'].to_numpy(), df['volume_ma'], f.ma_period)
+                    df['time_stddev'] = get_stddev(df['bar_time_ms'].to_numpy(), df['time_ma'], f.ma_period)
 
-        for name in ['volume', 'time']:
-            df.drop(columns=[f'ema_{name}', f'filter_{name}'], inplace=True)
+                    if f.filter_type == FilterType.StdDev:
+                        df['volume_filter'] = df['volume'] / df['volume_stddev']
+                        df['time_filter'] = (df['bar_time_ms'] / df['time_stddev'])
+                    else:
+                        df['volume_filter'] = (df['volume'] - df['volume_ma']) / df['volume_stddev']
+                        df['time_filter'] = (df['bar_time_ms'] - df['time_ma']) / df['time_stddev']
+
+                    df.drop(columns=['volume_stddev', 'time_stddev'], inplace=True)
+                df.drop(columns=['volume_ma', 'time_ma'], inplace=True)
+            case FilterType.Normalized_Emphasized:
+                # volume
+                df['volume_avg'] = df['volume'].rolling(f.n_period).mean()
+                df['volume_normalized'] = df['volume'] / df['volume_avg']
+                df['volume_pct'] = (df['volume_normalized'] * 100) - 100
+                df['volume_pct_multiplier'] = df['volume_pct'] * f.n_multiplier
+                # time
+                df['time_avg'] = df['bar_time_ms'].rolling(f.n_period).mean()
+                df['time_normalized'] = df['bar_time_ms'] / df['time_avg']
+                df['time_pct'] = (df['time_normalized'] * 100) - 100
+                df['time_pct_multiplier'] = df['time_pct'] * f.n_multiplier
+                # final
+                df['volume_filter'] = df['volume_pct_multiplier']
+                df['time_filter'] = df['time_pct_multiplier']
+
+                df.drop(columns=['volume_avg', 'volume_normalized', 'volume_pct', 'volume_pct_multiplier',
+                                 'time_avg', 'time_normalized', 'time_pct', 'time_pct_multiplier',], inplace=True)
+            case FilterType.L1Norm:
+                df['volume_filter'] = df['volume'].rolling(f.ma_period).apply(l1norm, raw=True)
+                df['time_filter'] = df['bar_time_ms'].rolling(f.ma_period).apply(l1norm, raw=True)
+
+        df['volume_filter'] = abs(df['volume_filter'])
+        df['time_filter'] = abs(df['time_filter'])
+        df['volume_filter'] = round(df['volume_filter'], 2)
+        df['time_filter'] = round(df['time_filter'], 2)
+        if f.filter_ratio == FilterRatio.Percentage and f.filter_type != FilterType.Normalized_Emphasized:
+            pctile = df['volume_filter'].rolling(f.n_period).apply(rolling_percentile, raw=True)
+            df['volume_filter'] = round(pctile, 1)
+
+            pctile = df['time_filter'].rolling(f.n_period).apply(rolling_percentile, raw=True)
+            df['time_filter'] = round(pctile, 1)
+
+        # Strength
+        d = df['volume_filter']
+        if f.filter_type == FilterType.Normalized_Emphasized:
+            df['volume_strength'] = np.where(d < f.lowest_pct, 0,
+                                    np.where(d < f.low_pct, 1,
+                                    np.where(d < f.average_pct, 2,
+                                    np.where(d < f.high_pct, 3,
+                                    np.where(d >= f.ultra_pct, 4, 4)))))
+        else:
+            df['volume_strength'] = np.where(d < f.lowest, 0,
+                                    np.where(d < f.low, 1,
+                                    np.where(d < f.average, 2,
+                                    np.where(d < f.high, 3,
+                                    np.where(d >= f.ultra, 4, 4))))) \
+                                if f.filter_ratio == FilterRatio.Fixed else \
+                                    np.where(d < f.lowest_pctile, 0,
+                                    np.where(d < f.low_pctile, 1,
+                                    np.where(d < f.average_pctile, 2,
+                                    np.where(d < f.high_pctile, 3,
+                                    np.where(d >= f.ultra_pctile, 4, 4))))) \
+
+
+        d = df['time_filter']
+        if f.filter_type == FilterType.Normalized_Emphasized:
+            df['time_strength'] = np.where(d < f.lowest_pct, 0,
+                                  np.where(d < f.low_pct, 1,
+                                  np.where(d < f.average_pct, 2,
+                                  np.where(d < f.high_pct, 3,
+                                  np.where(d >= f.ultra_pct, 4, 4)))))
+        else:
+            df['time_strength'] = np.where(d < f.lowest, 0,
+                                  np.where(d < f.low, 1,
+                                  np.where(d < f.average, 2,
+                                  np.where(d < f.high, 3,
+                                  np.where(d >= f.ultra, 4, 4))))) \
+                                if f.filter_ratio == FilterRatio.Fixed else \
+                                    np.where(d < f.lowest_pctile, 0,
+                                    np.where(d < f.low_pctile, 1,
+                                    np.where(d < f.average_pctile, 2,
+                                    np.where(d < f.high_pctile, 3,
+                                    np.where(d >= f.ultra_pctile, 4, 4)))))
 
         return df
 
-    def plot(self, iloc_value: int = 50, string_decimals: int = 3):
+    def plot(self, df: pd.DataFrame | None = None,  iloc_value: int | list = 15,
+                wyckoff_only: bool = False, bar_time: bool = True, bar_volume: bool = True,
+                bar_strength: bool = False, turning_point: bool = False,
+                chart: str = 'candle', renderer: str = 'default',
+                width: int = 1200, height: int = 800):
         """
-        Plot full_analysis() with mplfinance. \n
-        Designed for RENKO CHART ONLY. \n
+        Plot with plotly.
+
+        Waves information:
+            - (_) => Volume
+            - [_] => Effort vs Result
+            - 12p => Price
+            - 12m => Time
 
         Parameters
         ----------
-        iloc_value : int
-            * If positive: First nº rows will be plotted
-            * If negative: Last nº rows will be plotted
-        string_decimals : int
-            * Max characters to show on custom scatter mplfinance plot.
-            * Time values are always 3 characters
-            * if 3: 90 -> 090, 5 -> 005, etc...
-            * if 4: 90 -> 0090, 5 -> 0005, etc...
+        df : pd.DataFrame
+            If None, the df_ohlcv from WWS instance will be used
+        iloc_value : int | list
+            - if int => first nº values \n
+            - if list => [start_index, end_index] \n
+            - Used if 'df' parameter is None
+        wyckoff_only : bool
+            self-explanatory
+        bar_time : bool
+            self-explanatory
+        bar_volume : bool
+            self-explanatory
+        bar_strength : bool
+            Debug 'volume_filter' column
+        turning_point : bool
+            Show turning point of ZigZag
         """
-        if string_decimals < 3 or string_decimals > 4:
-            raise ValueError("string_decimals cannot be '< 3' and '> 4'")
+        _charts = ['candle', 'ohlc']
 
-        print("Performing Full Analysis...")
-        df = self.full_analysis()
+        input_values = [chart]
+        input_validation = [_charts]
+        for value, validation in zip(input_values, input_validation):
+            if value not in validation:
+                raise ValueError(f"Only {validation} options are valid.")
 
-        print("Calculating plots...")
-        if iloc_value < 0:
-            df = df.copy().iloc[iloc_value:]
-        else:
-            df =  df.copy().iloc[:iloc_value]
+        if df is None:
+            df = self.wyckoff_analysis() if wyckoff_only else self.full_analysis()
+
+            if type(iloc_value) is int:
+                df = df.iloc[:iloc_value]
+            else:
+                df = df.iloc[iloc_value[0]:iloc_value[1]]
+
+        df = df.copy()
+
+        fig = make_subplots(rows=1, cols=1, shared_xaxes=True, vertical_spacing=0.0)
+
+        df[f'plotly_int_index'] = range(len(df))
+        x_column_index = df[f'plotly_int_index']
+        trace_chart = go.Ohlc(x=x_column_index,
+                              open=df['open'],
+                              high=df['high'],
+                              low=df['low'],
+                              close=df['close'], opacity=0.4) if chart == 'ohlc' else \
+                      go.Candlestick(x=x_column_index,
+                                     open=df['open'],
+                                     high=df['high'],
+                                     low=df['low'],
+                                     close=df['close'], opacity=0.4)
+
+        # Set fill and wick colors
+        trace_chart.increasing.fillcolor = 'rgba(255,255,255, 0.0)'
+        trace_chart.increasing.line.color = 'rgba(62,62,64, 0.5)'
+        trace_chart.decreasing.fillcolor = 'rgba(255,255,255, 0.0)'
+        trace_chart.decreasing.line.color = 'rgba(62,62,64, 0.5)'
+
+        fig.add_trace(trace_chart, row=1, col=1)
 
         # Wyckoff Bars = Volume coloring
         df['is_up'] = df['close'] > df['open']
         df['is_up'] = df['is_up'].astype(int)
         df['bars_coloring'] = np.where((df['large_effort_result'] == 1), 'yellow',
-                            np.where((df['strength_volume'] == 4) & (df['is_up'] == 1), '#1D8934',
-                            np.where((df['strength_volume'] == 4) & (df['is_up'] == 0), '#E00106',
-                            np.where((df['strength_volume'] == 3) & (df['is_up'] == 1), '#A1F6A1',
-                            np.where((df['strength_volume'] == 3) & (df['is_up'] == 0),'#FA6681',
-                            np.where(df['strength_volume'] == 2, '#D9D9D9',
-                            np.where(df['strength_volume'] == 1, '#8F9092', '#3E3E40')))))))
-        coloring = df['bars_coloring'].to_list()
+                            np.where((df['volume_strength'] == 4) & (df['is_up'] == 1), 'rgba(29,137,52, 0.8)',
+                            np.where((df['volume_strength'] == 4) & (df['is_up'] == 0), 'rgba(224,1,6, 0.8)',
+                            np.where((df['volume_strength'] == 3) & (df['is_up'] == 1), 'rgba(161,246,161, 0.8)',
+                            np.where((df['volume_strength'] == 3) & (df['is_up'] == 0),'rgba(250,102,129, 0.8)',
+                            np.where(df['volume_strength'] == 2, 'rgba(217,217,217, 0.8)',
+                            np.where(df['volume_strength'] == 1, 'rgba(143,144,146, 0.8)', 'rgba(62,62,64, 0.8)'))))))) \
+                        if not wyckoff_only else \
+                            np.where((df['volume_strength'] == 4) & (df['is_up'] == 1), 'rgba(29,137,52, 0.8)',
+                            np.where((df['volume_strength'] == 4) & (df['is_up'] == 0), 'rgba(224,1,6, 0.8)',
+                            np.where((df['volume_strength'] == 3) & (df['is_up'] == 1), 'rgba(161,246,161, 0.8)',
+                            np.where((df['volume_strength'] == 3) & (df['is_up'] == 0),'rgba(250,102,129, 0.8)',
+                            np.where(df['volume_strength'] == 2, 'rgba(217,217,217, 0.8)',
+                            np.where(df['volume_strength'] == 1, 'rgba(143,144,146, 0.8)', 'rgba(62,62,64, 0.8)'))))))
 
-        # Wyckoff Bars = Volume display
-        df['markers_volume'] = '$' + df['volume'].astype(int).apply(lambda x: int_to_decimal_string(x, string_decimals)) + '$'
-        volume_markers = df['markers_volume'].to_list()
+        # Instead of creating multiples OHLC/Candlestick traces for each color,
+        # just create a histogram (Bar type) between Open/Close and... color it!
+        # idea from order_flow_ticks => spike chart
+        for index in range(len(df)):
+            open_i = df['open'].iat[index]
+            close_i = df['close'].iat[index]
 
-        # Wyckoff Bars = Time display
-        df_time = timedelta_to_decimal_string(df['bar_time'])
-        df_time['time_human'] = '$' + df_time['time_human'].str[:3] + '$'
-        time_markers = df_time['time_human'].to_list()
+            is_up = open_i > close_i
+            coloring = df['bars_coloring'].iat[index]
 
+            # Due to automatic size between values, create one histogram for each bar.
+            # vertical for [y1, y2]-like approach.
+            fig.add_trace(
+                go.Bar(y=[abs(close_i - open_i)], x=[index],
+                   orientation='v', base=[close_i if is_up else open_i],
+                   marker=dict(
+                       color=coloring,
+                       opacity = 0.9
+                   )), row=1, col=1)
 
-        # Weis Waves = Effort vs Result
-        df['markers_EvsR'] = '$' + df['wave_effort_result'].apply(lambda x: float_to_decimal_string(x, string_decimals)) + '$'
-        waves_effvsres_markers = df['markers_EvsR'].to_list()
-
-        # Weis Waves = Volume
-        df['markers_volume'] = '$' + df['wave_volume'].apply(lambda x: float_to_decimal_string(x, string_decimals)) + '$'
-        waves_volume_markers = df['markers_volume'].to_list()
-
-        # Weis Waves = Price
-        df['markers_price'] = '$' + df['wave_price'].apply(lambda x: float_to_decimal_string(x, string_decimals)) + '$'
-        waves_price_markers = df['markers_price'].to_list()
-
-        # Weis Waves = Time
-        waves_df_time = timedelta_to_decimal_string(df['wave_time'])
-        waves_df_time['wave_time_human'] = '$' + waves_df_time['time_human'].str[:3] + '$'
-        waves_time_markers = waves_df_time['wave_time_human'].to_list()
-
-        # Plot positions
-        brick_size = abs(df['close'].iat[1] - df['open'].iat[1])
         df['hl2'] = (df['close'] + df['open']) / 2
-        df['hl2_up'] = df['hl2'] + (brick_size / 4)
-        # close +- brick_size / position_step
-        df['close_1'] = df['close'] + ((df['close'] - df['open']) / 6)
-        df['close_2'] = df['close'] + ((df['close'] - df['open']) / 2.5)
-        df['close_3'] = df['close'] + ((df['close'] - df['open']) / 1.5)
-        df['close_4'] = df['close'] + ((df['close'] - df['open']) / 1)
-        # Just the end of wave
-        df['end_wave_fill'] = df['end_wave'].fillna(0)
-        df['close_1'] = np.where(df['end_wave_fill'] != 0, df['close_1'], np.NaN)
-        df['close_2'] = np.where(df['end_wave_fill'] != 0, df['close_2'], np.NaN)
-        df['close_3'] = np.where(df['end_wave_fill'] != 0, df['close_3'], np.NaN)
-        df['close_4'] = np.where(df['end_wave_fill'] != 0, df['close_4'], np.NaN)
-
-        size = 150 if string_decimals == 3 else 250
-        size_times = 150 if string_decimals == 3 else 130
-        ap0 = [mpf.make_addplot(df['close_1'], color='skyblue', markersize=size, type='scatter', marker=waves_volume_markers),
-               mpf.make_addplot(df['close_2'], color='coral', markersize=size, type='scatter', marker=waves_effvsres_markers),
-               mpf.make_addplot(df['close_3'], color='white', markersize=size, type='scatter', marker=waves_price_markers),
-               mpf.make_addplot(df['close_4'], color='lightgray', markersize=size_times, type='scatter', marker=waves_time_markers),
-               mpf.make_addplot(df['hl2_up'], color='skyblue', markersize=size, type='scatter', marker=volume_markers),
-               mpf.make_addplot(df['hl2'], color='lightgray', markersize=size_times, type='scatter', marker=time_markers)]
-
-        print('Completed! mpf.plot() was called, wait a moment!')
-        mpf.plot(df, type='candle', style='nightclouds', volume=True, marketcolor_overrides=coloring, addplot=ap0,
-                 title="Weis & Wyckoff System",
-                 figsize=(12.5,6),
-                 returnfig=True,
-                 scale_padding=0.2)
-
-        # ax.text have some limitations:
-        #   * cannot plot massive texts
-        #   * text axis change when zooming
-        # a workaround with scatter custom markers is a more suitable approach
-        mpf.show()
-
-    def plot_wyckoff(self, iloc_value: int = 50, string_decimals: int = 3, plot_time: bool = True):
-        """
-        Plot wyckoff_analysis() with mplfinance. \n
-        Can be used with Range chart. \n
-
-        Parameters
-        ----------
-        iloc_value : int
-            * If positive: First nº rows will be plotted
-            * If negative: Last nº rows will be plotted
-        string_decimals : int
-            * Max characters to show on custom scatter mplfinance plot.
-            * Time values are always 3 characters
-            * if 3: 90 -> 090, 5 -> 005, etc...
-            * if 4: 90 -> 0090, 5 -> 0005, etc...
-        """
-        if string_decimals < 3 or string_decimals > 4:
-            raise ValueError("string_decimals cannot be '< 3' and '> 4'")
-
-        print("Performing Wyckoff Analysis...")
-        df = self.wyckoff_analysis()
-
-        print("Calculating plots...")
-        if iloc_value < 0:
-            df = df.copy().iloc[iloc_value:]
-        else:
-            df =  df.copy().iloc[:iloc_value]
-
-        # Wyckoff Bars = Volume coloring
-        df['is_up'] = df['close'] > df['open']
-        df['is_up'] = df['is_up'].astype(int)
-        df['bars_coloring'] = np.where((df['strength_volume'] == 4) & (df['is_up'] == 1), '#1D8934',
-                            np.where((df['strength_volume'] == 4) & (df['is_up'] == 0), '#E00106',
-                            np.where((df['strength_volume'] == 3) & (df['is_up'] == 1), '#A1F6A1',
-                            np.where((df['strength_volume'] == 3) & (df['is_up'] == 0),'#FA6681',
-                            np.where(df['strength_volume'] == 2, '#D9D9D9',
-                            np.where(df['strength_volume'] == 1, '#8F9092', '#3E3E40'))))))
-        coloring = df['bars_coloring'].to_list()
-
-        # Wyckoff Bars = Volume display
-        df['markers_volume'] = '$' + df['volume'].astype(int).apply(lambda x: int_to_decimal_string(x, string_decimals)) + '$'
-        volume_markers = df['markers_volume'].to_list()
 
         # Wyckoff Bars = Time display
-        time_markers = []
-        if plot_time:
+        if bar_time and not bar_strength:
             df_time = timedelta_to_decimal_string(df['bar_time'])
-            df_time['time_human'] = '$' + df_time['time_human'].str[:3] + '$'
-            time_markers = df_time['time_human'].to_list()
+            df_time['time_human'] = df_time['time_human'].str[:3]
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['hl2'],
+                                     mode='text',
+                                     text=df_time['time_human'],
+                                     textposition='bottom center',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
 
-        # Plot positions
-        brick_size = abs(df['close'].iat[1] - df['open'].iat[1])
-        df['hl2'] = (df['close'] + df['open']) / 2
-        df['hl2_up'] = df['hl2'] + (brick_size / 4)
+        # Wyckoff Bars = Volume display
+        if bar_volume:
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['hl2'],
+                                     mode='text',
+                                     text=df['volume'],
+                                     textposition='top center',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
+        if bar_strength:
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['hl2'],
+                                     mode='text',
+                                     text=df['volume_filter'],
+                                     textposition='bottom center',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
+        if not wyckoff_only:
+            # Weis Waves
+            df['end_wave_fill'] = df['end_wave'].fillna(0)
+            df['close_1'] = np.where(df['end_wave_fill'] != 0, df['trendline'], np.NaN)
 
-        size = 150 if string_decimals == 3 else 250
-        size_times = 150 if string_decimals == 3 else 130
-        ap0 = [mpf.make_addplot(df['hl2_up'], color='skyblue', markersize=size, type='scatter', marker=volume_markers)]
-        if plot_time:
-            ap0.extend([mpf.make_addplot(df['hl2'], color='lightgray', markersize=size_times,
-                        type='scatter', marker=time_markers)])
+            # Volume
+            df['wave_volume_string'] = '(' + df['wave_volume'].astype(str) + ') | ' # some space
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['close_1'],
+                                     mode='text',
+                                     text=df['wave_volume_string'],
+                                     textposition='top left',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
 
-        print('Completed! mpf.plot() was called, wait a moment!')
-        mpf.plot(df, type='candle', style='nightclouds', volume=True, marketcolor_overrides=coloring, addplot=ap0,
-                 title="Weis & Wyckoff System",
-                 figsize=(12.5,6),
-                 returnfig=True,
-                 scale_padding=0.2)
-        mpf.show()
+            # Effort vs Result
+            df['wave_effort_result_string'] = '[' + df['wave_effort_result'].astype(str) + ']'
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['close_1'],
+                                     mode='text',
+                                     text=df['wave_effort_result_string'],
+                                     textposition='top right',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
+
+
+            # Price
+            df['wave_price_string'] = df['wave_price'].astype(str) + 'p | ' # some space
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['close_1'],
+                                     mode='text',
+                                     text=df['wave_price_string'],
+                                     textposition='bottom left',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
+
+            # Time
+            waves_df_time = timedelta_to_decimal_string(df['wave_time'])
+            waves_df_time['wave_time_human'] = waves_df_time['time_human'].str[:3]
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['close_1'],
+                                     mode='text',
+                                     text=waves_df_time['wave_time_human'],
+                                     textposition='bottom right',
+                                     textfont=dict(size=9, color='blue'),
+                                     opacity=1), row=1, col=1)
+
+            # ZigZag
+            fig.add_trace(go.Scatter(x=x_column_index,
+                                     y=df['trendline'],
+                                     mode='lines',
+                                     marker=dict(
+                                         color='aqua',
+                                         size=1,
+                                     ),
+                                     # IMPORTANT!
+                                     # Connect prices points
+                                     connectgaps=True,
+                                     opacity=1), row=1, col=1)
+
+            if turning_point:
+                fig.add_trace(go.Scatter(x=x_column_index,
+                                         y=df['turning_point'],
+                                         mode='markers',
+                                         marker=dict(
+                                             color='red',
+                                             size=4,
+                                         ),
+                                         opacity=1), row=1, col=1)
+
+        fig.update_layout(
+            title=f"Weis & Wyckoff System",
+            height=800,
+            # IMPORTANT!
+            # Allows bars(histograms) to diverge from the center (0)
+            # from plotply horizontal bars chart wiki
+            barmode='relative', # or overlay
+            xaxis_rangeslider_visible=False
+        )
+        fig.update_traces(
+            showlegend=False
+        )
+        if renderer != 'default':
+            if renderer in ['svg', 'png', 'jpeg']:
+                fig.show(renderer=renderer, width=width, height=height)
+            else:
+                fig.show(renderer=renderer)
+        else:
+            fig.show()
+
 
 def timedelta_to_human_readable(df_timedelta: pd.Series):
     df_comp = df_timedelta.dt.components
@@ -652,12 +632,3 @@ def timedelta_to_decimal_string(df_timedelta: pd.Series):
         times_strings.append(''.join(parts) or '0ms')
 
     return pd.DataFrame(times_strings, columns=['time_human'])
-
-def int_to_decimal_string(number: int, decimals: int):
-    return f'{number:0{decimals}d}'
-
-def float_to_decimal_string(number: float, decimals: int):
-    nb_str = str(number)[::-1].find('.') == -1
-    if nb_str -1:
-        return f'{int(number):0{decimals}d}'
-    return f'{number:0<{decimals-2}.1f}'

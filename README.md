@@ -1,21 +1,34 @@
 # srl-python-indicators
-Python version of the indicators I developed for cTrader trading plataform, with improvements _(paralel processing)_ and additional features compared to C# source code.
+Python version of [srl-ctrader-indicators](https://github.com/srlcarlg/srl-ctrader-indicators)
 
-Only _**order_flow_ticks**_ and _**order_flow_aggregated**_ are plotted using the **plotly** library, see 'notebooks' folder.
+**The features of each indicator** are now fully synchronized with C# code. <br>
+**The additional features** developed here will be added _(perhaps improved!)_ to C# version soon, at the proper time.
 
-All others are plotted with **mplfinance**.
+Currently, all indicators are plotted with 'plotly' library, but:
+- *multi_vwap* can be plotted with mplfinance
+- *tpo_profile/volume_profile* have limited support to plot with mplfinance (ex: no levels)
+- *weis_wyckoff_system* no longer uses mplfinance.
+
+See ‘notebooks’ folder for a detailed review of each indicator.
 
 
 ```python
 import pandas as pd
-from order_flow_ticks import OrderFlowTicks
 
 df_ticks = pd.read_parquet(f"data/US30_T1_2025_cT.parquet")
 df_ticks.rename(columns={'bid': 'close'}, inplace=True)
-
 df_ticks.head(3)
-df_ticks.tail(3)
 len(df_ticks)
+
+df_ohlcv = pd.read_parquet(f"data/US30_1Minute_2025_cT.parquet")
+df_ohlcv.head(3)
+len(df_ohlcv)
+
+from rangedf import Range
+r = Range(df_ticks, range_size=14)
+df_range = r.range_df()
+
+render = 'png'
 ```
 
 
@@ -65,61 +78,9 @@ len(df_ticks)
 
 
 
-<div>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>ask</th>
-      <th>close</th>
-      <th>spread</th>
-    </tr>
-    <tr>
-      <th>datetime</th>
-      <th></th>
-      <th></th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>2025-05-16 20:54:59.640</th>
-      <td>42376.7</td>
-      <td>42375.6</td>
-      <td>1.1</td>
-    </tr>
-    <tr>
-      <th>2025-05-16 20:54:59.841</th>
-      <td>42377.1</td>
-      <td>42376.0</td>
-      <td>1.1</td>
-    </tr>
-    <tr>
-      <th>2025-05-16 20:55:00.000</th>
-      <td>42377.9</td>
-      <td>42376.8</td>
-      <td>1.1</td>
-    </tr>
-  </tbody>
-</table>
-</div>
-
-
-
-
-
-
     180399
 
 
-
-
-```python
-df_ohlcv = pd.read_parquet(f"data/US30_1Minute_2025_cT.parquet")
-df_ohlcv.head(3)
-df_ohlcv.tail(3)
-len(df_ohlcv)
-```
 
 
 
@@ -178,158 +139,95 @@ len(df_ohlcv)
 
 
 
-<div>
-<table border="1" class="dataframe">
-  <thead>
-    <tr style="text-align: right;">
-      <th></th>
-      <th>open</th>
-      <th>high</th>
-      <th>low</th>
-      <th>close</th>
-      <th>volume</th>
-    </tr>
-    <tr>
-      <th>datetime</th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-      <th></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <th>2025-05-16 20:52:00</th>
-      <td>42462.1</td>
-      <td>42465.6</td>
-      <td>42447.1</td>
-      <td>42447.3</td>
-      <td>205.0</td>
-    </tr>
-    <tr>
-      <th>2025-05-16 20:53:00</th>
-      <td>42447.7</td>
-      <td>42449.8</td>
-      <td>42412.2</td>
-      <td>42414.2</td>
-      <td>260.0</td>
-    </tr>
-    <tr>
-      <th>2025-05-16 20:54:00</th>
-      <td>42412.5</td>
-      <td>42420.4</td>
-      <td>42371.4</td>
-      <td>42376.0</td>
-      <td>399.0</td>
-    </tr>
-  </tbody>
-</table>
-</div>
-
-
-
-
-
-
     2631
 
 
 
 
 ```python
-from volume_profile import VolumeProfile, DistributionData
+from order_flow_aggregated import OrderFlowAggregated, SpikePlot
+odft = OrderFlowAggregated(df_range, df_ticks, 3, is_open_time=False)
+
+plot_params = SpikePlot(spike_chart=True, spike_levels=False)
+odft.plot([50, 100], mode='delta', chart='ohlc', spike_plot=plot_params, renderer=render)
+```
+
+
+    
+![png](./readme_files/output_3_0.png)
+    
+
+
+
+```python
+odft.plot_bubbles([350, 500], 'subtract', 'heatmap', renderer=render)
+```
+
+
+    
+![png](./readme_files/output_4_0.png)
+    
+
+
+
+```python
+from volume_profile import VolumeProfile, DistributionData, ExtraProfile
+
+vp = VolumeProfile(df_ohlcv, None, 7, pd.Timedelta(hours=12), DistributionData.OHLC_No_Avg)
+vp.plot_ly('normal', nodes_source='lvn',
+          extra_profile=ExtraProfile.Mini, mini_interval=pd.Timedelta(hours=8),
+          renderer=render)
+```
+
+
+    
+![png](./readme_files/output_5_0.png)
+    
+
+
+
+```python
 from tpo_profile import TpoProfile
-from multi_vwap import MultiVwap
 
-vp = VolumeProfile(df_ohlcv, None, 7, pd.Timedelta(hours=8), DistributionData.OHLC_No_Avg)
 tpo = TpoProfile(df_ohlcv, 7, pd.Timedelta(hours=8))
+tpo.plot_ly(nodes_source='hvn', renderer=render)
+```
+
+
+    
+![png](./readme_files/output_6_0.png)
+    
+
+
+
+```python
+from multi_vwap import MultiVwap, BandsFilter, BandsType
+
 vwap = MultiVwap(df_ohlcv)
-```
-
-
-```python
-vp.plot('buy_sell')
+filter = BandsFilter(BandsType.Percentile_Asymmetric, volume_weighted=False)
+vwap.plot_ly(bands_at='daily', bands_filter=filter, renderer=render)
 ```
 
 
     
-![png](readme_files/output_5_0.png)
+![png](./readme_files/output_7_0.png)
     
 
 
 
 ```python
-tpo.plot()
-```
-
-
-    
-![png](readme_files/output_6_0.png)
-    
-
-
-
-```python
-vwap.plot('2025-05-15 14:33:00')
-```
-
-
-    
-![png](readme_files/output_7_0.png)
-    
-
-
-
-```python
-df_renko = pd.read_parquet(f"data/2023/US30_Re50_2023_normal.parquet")
 from weis_wyckoff_system import WeisWyckoffSystem
-ww = WeisWyckoffSystem(df_renko)
-ww.plot(iloc_value=30)
+from models_utils.ww_models import ZigZagInit, ZigZagMode, PriorityMode
+
+ww = WeisWyckoffSystem()
+_zz = ZigZagInit(ZigZagMode.Percentage, pct_value=0.02)
+df = ww.full_analysis(df_ohlcv, None, None, zigzag_init=_zz)
+df = df.iloc[10:150]
+ww.plot(df, bar_time=False, bar_volume=False, turning_point=True, renderer=render)
 ```
 
-    Performing Full Analysis...
-    Calculating plots...
-    Completed! mpf.plot() was called, wait a moment!
-
-
 
     
-![png](readme_files/output_8_1.png)
-    
-
-
-
-```python
-ww.plot_wyckoff(iloc_value=30)
-```
-
-    Performing Wyckoff Analysis...
-    Calculating plots...
-    Completed! mpf.plot() was called, wait a moment!
-
-
-
-    
-![png](readme_files/output_9_1.png)
-    
-
-
-
-```python
-from rangedf import Range
-r = Range(df_ticks, range_size=5)
-ww = WeisWyckoffSystem(r.range_df())
-ww.plot_wyckoff(60, plot_time=False)
-```
-
-    Performing Wyckoff Analysis...
-    Calculating plots...
-    Completed! mpf.plot() was called, wait a moment!
-
-
-
-    
-![png](readme_files/output_10_1.png)
+![png](./readme_files/output_8_0.png)
     
 
